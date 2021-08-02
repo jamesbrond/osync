@@ -7,6 +7,7 @@ import argparse
 import configparser
 from distutils.spawn import find_executable
 import os
+import errno
 import re
 import subprocess
 import sys
@@ -33,7 +34,7 @@ def parse_cmd_line():
   # tools options
   parser.add_argument('-sqlplus', dest='sqlplus', help='path to SQLPlus command')
   # logging options
-  parser.add_argument('-q', '--quiet', required=False, dest='debuglevel', action='store_const', const=logging.CRITICAL, default=logging.ERROR, help='suppress debug level messages')
+  parser.add_argument('-q', '--quiet', required=False, dest='debuglevel', action='store_const', const=logging.NOTSET, default=logging.ERROR, help='suppress debug level messages')
   parser.add_argument('-v', '--verbose', required=False, dest='debuglevel', action='store_const', const=logging.INFO, default=logging.ERROR, help='increase verbosity level (INFO)')
   parser.add_argument('-vv', '--very-verbose', required=False, dest='debuglevel', action='store_const', const=logging.DEBUG, default=logging.ERROR, help='increase verbosity to higher level (DEBUG)')
   # revision tool
@@ -50,8 +51,14 @@ def log():
   L.setLevel(g_args.debuglevel)
   if not L.handlers:
     formatter = logging.Formatter('%(asctime)s [%(levelname)-5s] %(message)s (%(lineno)d)')
-    # log to file
     file_name = os.path.join(g_args.source, '.osync', 'osync.log')
+    if not os.path.exists(os.path.dirname(file_name)):
+      try:
+        os.makedirs(os.path.dirname(file_name))
+      except OSError as exc:
+        if exc.errno != errno.EEXIST:
+          raise
+    # log to file
     handler = FileHandler(file_name, mode='w', encoding='utf-8')
     handler.setFormatter(formatter)
     handler.setLevel(g_args.debuglevel)
@@ -80,7 +87,7 @@ def read_config(source):
   else:
     L.debug('open configuration file at %s', cfg_path)
     with open(cfg_path) as c:
-      cfg.readfp(c)
+      cfg.read_file(c)
 
   return cfg
 
@@ -95,32 +102,33 @@ def write_config(source):
 
 
 def write_patch(sqlfilename, patchfilename, spoolfilename):
+  global L
   if os.path.exists(sqlfilename) and os.path.isfile(sqlfilename):
-    with open(sqlfilename, 'r', encoding='utf8') as f:
-      with open(patchfilename, 'w', encoding='utf8') as p:
-        p.write('SET ECHO OFF\n')
-        p.write('SET VERIFY OFF\n')
-        p.write('SET HEADING OFF\n')
-        p.write('SET TERMOUT OFF\n')
-        p.write('SET TRIMOUT ON\n')
-        p.write('SET TRIMSPOOL ON\n')
-        p.write('SET WRAP OFF\n')
-        p.write('SET LINESIZE 32000\n')
-        p.write('SET LONG 32000\n')
-        p.write('SET LONGCHUNKSIZE 32000\n')
-        p.write('SET SERVEROUT ON\n')
-        p.write('SET DEFINE OFF\n')
-        p.write('SET PAGESIZE 0\n')
-        p.write('SPOOL ' + spoolfilename + ' APPEND\n\n')
-        p.write('PROMPT +' + '-' * 80 + '+\n')
-        p.write('PROMPT +- START FILE: ' + sqlfilename + '\n')
+    with open(sqlfilename, 'rb') as f:
+      with open(patchfilename, 'wb') as p:
+        p.write(b'SET ECHO OFF\n')
+        p.write(b'SET VERIFY OFF\n')
+        p.write(b'SET HEADING OFF\n')
+        p.write(b'SET TERMOUT OFF\n')
+        p.write(b'SET TRIMOUT ON\n')
+        p.write(b'SET TRIMSPOOL ON\n')
+        p.write(b'SET WRAP OFF\n')
+        p.write(b'SET LINESIZE 32000\n')
+        p.write(b'SET LONG 32000\n')
+        p.write(b'SET LONGCHUNKSIZE 32000\n')
+        p.write(b'SET SERVEROUT ON\n')
+        p.write(b'SET DEFINE OFF\n')
+        p.write(b'SET PAGESIZE 0\n')
+        p.write(bytes('SPOOL ' + spoolfilename + ' APPEND\n\n', 'utf-8'))
+        p.write(bytes('PROMPT +' + '-' * 80 + '+\n', 'utf-8'))
+        p.write(bytes('PROMPT +- START FILE: ' + sqlfilename + '\n', 'utf-8'))
         for line in f:
           p.write(line)
-        p.write('\n\n')
-        p.write('PROMPT +- END FILE: ' + sqlfilename + '\n')
-        p.write('PROMPT +' + '-' * 80 + '+\n')
-        p.write('SPOOL OFF\n')
-        p.write('QUIT\n')
+        p.write(b'\n\n')
+        p.write(bytes('PROMPT +- END FILE: ' + sqlfilename + '\n', 'utf-8'))
+        p.write(bytes('PROMPT +' + '-' * 80 + '+\n', 'utf-8'))
+        p.write(b'SPOOL OFF\n')
+        p.write(b'QUIT\n')
         return True
   return False
 
@@ -216,10 +224,7 @@ def svn_changes():
     g_cfg['svn'] = {}
     last_rev = 0
 
-  if os.sep == '\\':
-    regexp = r'\\([^\\]*)$'
-  else:
-    regexp = r'/([^/]*)$'
+  regexp = r'/([^/]*)$'
   p = re.compile(regexp)
   match = p.findall(g_args.source)[0] + '/'
   p = re.compile(match + '(.*)$')
@@ -281,10 +286,7 @@ def git_changes():
     L.info('nothing to do')
     sys.exit(0)
 
-  if os.sep == '\\':
-    regexp = r'\\([^\\]*)$'
-  else:
-    regexp = r'/([^/]*)$'
+  regexp = r'/([^/]*)$'
   p = re.compile(regexp)
   match = p.findall(g_args.source)[0] + '/'
   p = re.compile(match + '(.*)$')
@@ -344,7 +346,7 @@ try:
     sys.exit(0)
 
   run_changes(changes)
-
+  
   write_config(g_args.source)
 
   L.debug('done')
